@@ -6,3 +6,5 @@ end
 
 fish_add_path ~/.local/bin
 fish_add_path /opt/cuda/bin
+
+zoxide init fish | source
