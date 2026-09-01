@@ -3,6 +3,8 @@ source /usr/share/cachyos-fish-config/cachyos-config.fish
 fish_add_path ~/.local/bin
 fish_add_path /opt/cuda/bin
 
+set -gx EDITOR helix
+
 zoxide init fish | source
 
 # Tide prompt. Globals (not universals) so the settings live in this file.
