@@ -1,0 +1,198 @@
+{{- if eq .chezmoi.osRelease.id "cachyos" -}}
+#!/bin/bash
+# Internal speakers for the 2026 Razer Blade 16 (RZ09-0581) on CachyOS.
+# Other machines get an empty script and chezmoi skips it.
+#
+# The kernel exposes SOF SoundWire as hs:rt721 spk:rt721+rt1320. alsa-ucm-conf
+# 1.2.16 then includes /codecs/rt721+rt1320/init.conf, which upstream never
+# shipped, so UCM fails and PipeWire falls back to stereo-fallback on the
+# headphone PCM with the RT1320 amp terminals left off. Ubuntu works because
+# it carries extra UCM patches. This restores the missing init file, keeps it
+# across alsa-ucm-conf upgrades, and re-enables the amp after PipeWire starts.
+set -euo pipefail
+
+vendor=$(tr -d '\0' </sys/devices/virtual/dmi/id/sys_vendor 2>/dev/null || true)
+product=$(tr -d '\0' </sys/devices/virtual/dmi/id/product_name 2>/dev/null || true)
+
+if [[ "$vendor" != "Razer" || "$product" != *RZ09-0581* ]]; then
+  exit 0
+fi
+
+share="${XDG_DATA_HOME:-$HOME/.local/share}/razer-speakers"
+unit_dir="$HOME/.config/systemd/user"
+overlay_dir=/usr/share/alsa/ucm2/codecs/rt721+rt1320
+overlay="$overlay_dir/init.conf"
+hook=/etc/pacman.d/hooks/razer-blade16-speakers.hook
+libexec=/usr/local/libexec/razer-blade16-ucm-overlay.sh
+unit="$unit_dir/razer-blade16-speakers.service"
+
+mkdir -p "$share" "$unit_dir"
+
+cat >"$share/enable-speakers.sh" <<'EOF'
+#!/bin/bash
+# Unmute the RT1320 speaker amp and keep PipeWire on the UCM HiFi profile.
+set -euo pipefail
+
+card=""
+for _ in $(seq 1 50); do
+  if [[ -e /proc/asound/sofsoundwire ]]; then
+    card=sofsoundwire
+    break
+  fi
+  sleep 0.2
+done
+[[ -n "$card" ]] || exit 0
+
+for _ in $(seq 1 50); do
+  if amixer -c "$card" sget 'rt1320-1 OT23 L' >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.2
+done
+amixer -c "$card" sget 'rt1320-1 OT23 L' >/dev/null 2>&1 || exit 0
+
+amixer -c "$card" sset 'Speaker' on >/dev/null
+amixer -c "$card" sset 'rt1320-1 OT23 L' on >/dev/null
+amixer -c "$card" sset 'rt1320-1 OT23 R' on >/dev/null
+if amixer -c "$card" sget 'rt1320-2 OT23 L' >/dev/null 2>&1; then
+  amixer -c "$card" sset 'rt1320-2 OT23 L' on >/dev/null
+  amixer -c "$card" sset 'rt1320-2 OT23 R' on >/dev/null
+fi
+
+pw_card=""
+for _ in $(seq 1 50); do
+  pw_card=$(pactl list short cards 2>/dev/null | awk '/sof_sdw/ {print $2; exit}') || true
+  if [[ -n "${pw_card:-}" ]]; then
+    break
+  fi
+  sleep 0.2
+done
+if [[ -n "${pw_card:-}" ]] && pactl list cards | awk -v c="$pw_card" '
+  $0 ~ "Name: "c {found=1}
+  found && /HiFi:/ {ok=1}
+  found && /^Card / {exit}
+  END {exit ok ? 0 : 1}
+'; then
+  pactl set-card-profile "$pw_card" HiFi >/dev/null || true
+  for _ in $(seq 1 25); do
+    speaker=$(pactl list short sinks 2>/dev/null | awk '/HiFi__Speaker__sink/ {print $2; exit}') || true
+    if [[ -n "${speaker:-}" ]]; then
+      pactl set-default-sink "$speaker" >/dev/null || true
+      break
+    fi
+    sleep 0.2
+  done
+fi
+EOF
+chmod 0755 "$share/enable-speakers.sh"
+
+cat >"$unit" <<EOF
+[Unit]
+Description=Enable Razer Blade 16 RT1320 speaker amp
+After=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+
+[Service]
+Type=oneshot
+ExecStart=$share/enable-speakers.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
+EOF
+
+cat >"$share/ucm-overlay.sh" <<'EOF'
+#!/bin/bash
+# Install or restore the missing alsa-ucm-conf combo codec init.
+# Safe to run as root from a pacman hook; no-ops once upstream ships the file.
+set -euo pipefail
+
+overlay_dir=/usr/share/alsa/ucm2/codecs/rt721+rt1320
+overlay="$overlay_dir/init.conf"
+
+if [[ -e "$overlay" ]]; then
+  owner=$(pacman -Qqo "$overlay" 2>/dev/null || true)
+  if [[ "$owner" == "alsa-ucm-conf" ]]; then
+    exit 0
+  fi
+fi
+
+install -d -m 0755 "$overlay_dir"
+cat >"$overlay" <<'INIT'
+# Combo speaker codec reported as spk:rt721+rt1320 on SOF SoundWire.
+# alsa-ucm-conf 1.2.16 includes /codecs/${SpeakerCodecFile}/init.conf
+# but does not ship this directory. Include the two real codec inits.
+Include.rt721.File "/codecs/rt721/init.conf"
+Include.rt1320.File "/codecs/rt1320/init.conf"
+INIT
+chmod 0644 "$overlay"
+EOF
+chmod 0755 "$share/ucm-overlay.sh"
+
+cat >"$share/alsa-ucm-conf.hook" <<EOF
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = alsa-ucm-conf
+
+[Action]
+Description = Restore Razer Blade 16 rt721+rt1320 UCM overlay
+When = PostTransaction
+Exec = /usr/bin/bash $libexec
+EOF
+
+need_root=0
+overlay_ok=0
+if [[ -f "$overlay" ]] && grep -Fq 'Include.rt1320.File "/codecs/rt1320/init.conf"' "$overlay"; then
+  overlay_ok=1
+fi
+if [[ -e "$overlay" ]]; then
+  owner=$(pacman -Qqo "$overlay" 2>/dev/null || true)
+  if [[ "$owner" == "alsa-ucm-conf" ]]; then
+    overlay_ok=1
+  fi
+fi
+if ((overlay_ok == 0)); then
+  need_root=1
+fi
+if [[ ! -f "$libexec" ]] || ! cmp -s "$share/ucm-overlay.sh" "$libexec"; then
+  need_root=1
+fi
+if [[ ! -f "$hook" ]] || ! cmp -s "$share/alsa-ucm-conf.hook" "$hook"; then
+  need_root=1
+fi
+
+if ((need_root)); then
+  root_install="$share/install-system.sh"
+  cat >"$root_install" <<EOF
+#!/bin/bash
+set -euo pipefail
+install -d -m 0755 /usr/local/libexec /etc/pacman.d/hooks
+install -m 0755 '$share/ucm-overlay.sh' '$libexec'
+install -m 0644 '$share/alsa-ucm-conf.hook' '$hook'
+'$libexec'
+EOF
+  chmod 0755 "$root_install"
+  if sudo -n true 2>/dev/null; then
+    sudo "$root_install"
+  elif [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v pkexec >/dev/null; then
+    pkexec /bin/bash "$root_install"
+  else
+    sudo "$root_install"
+  fi
+fi
+
+systemctl --user daemon-reload
+systemctl --user enable --now razer-blade16-speakers.service >/dev/null
+
+if ((need_root)); then
+  systemctl --user restart pipewire.service pipewire-pulse.service wireplumber.service
+  sleep 1
+  systemctl --user start razer-blade16-speakers.service
+fi
+
+"$share/enable-speakers.sh"
+{{- end -}}
+
