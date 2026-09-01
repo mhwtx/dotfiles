@@ -5,3 +5,6 @@ shelly install standard github-cli -n
 
 # prompt user to log in to github cli
 gh auth login
+
+# setup git, maybe should move this to fish config so it just always runs, idk
+gh auth setup-git
