@@ -1,0 +1,15 @@
+{{- if eq .chezmoi.osRelease.id "cachyos" -}}
+#!/bin/bash
+# OLED brightness/HDR for the 2026 Razer Blade 16 (RZ09-0581) on CachyOS.
+# Other machines get an empty script and chezmoi skips it.
+set -euo pipefail
+
+vendor=$(tr -d '\0' </sys/devices/virtual/dmi/id/sys_vendor 2>/dev/null || true)
+product=$(tr -d '\0' </sys/devices/virtual/dmi/id/product_name 2>/dev/null || true)
+
+if [[ "$vendor" != "Razer" || "$product" != *RZ09-0581* ]]; then
+  exit 0
+fi
+
+bash <(curl -fsSL https://raw.githubusercontent.com/visorcraft/razer_16_2026_linux_oled_brightness/master/quick-fix.sh)
+{{- end -}}
