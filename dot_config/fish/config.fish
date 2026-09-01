@@ -15,4 +15,4 @@ set -gx EDITOR helix
 set --global fish_key_bindings fish_default_key_bindings
 
 # Tools
-zoxide init fish | source
+zoxide init fish --cmd cd | source
