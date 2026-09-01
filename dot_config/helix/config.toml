@@ -1,0 +1,12 @@
+theme = "ayu_dark"
+
+[editor]
+line-number = "relative"
+mouse = true
+
+[editor.statusline]
+left = ["mode", "spinner", "diagnostics"]
+right = ["position", "file-type"]
+
+[editor.file-picker]
+hidden = false
