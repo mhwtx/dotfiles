@@ -1,8 +1,7 @@
 source /usr/share/cachyos-fish-config/cachyos-config.fish
 
 function fish_greeting
-	fastfetch -s break:os:kernel:cpu:memory:gpu:disk:break:colors  --logo-type small
+    fastfetch -s break:os:kernel:shell:cpu:memory:gpu:disk:battery:break:colors
 end
 
 fish_add_path ~/.local/bin
-
