@@ -1,0 +1,43 @@
+{{- if eq .chezmoi.osRelease.id "cachyos" -}}
+#!/bin/bash
+# Install missing packages from packages.toml. Skip anything already present.
+# packages.toml hash: {{ include "packages.toml" | sha256sum }}
+set -euo pipefail
+
+src={{ .chezmoi.sourceDir | quote }}
+
+install_missing() {
+  local kind=$1
+  shift
+  local -a missing=()
+  local pkg
+  for pkg in "$@"; do
+    if ! pacman -Q "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+  if ((${#missing[@]})); then
+    echo "shelly install $kind: ${missing[*]}"
+    shelly install "$kind" -n -- "${missing[@]}"
+  fi
+}
+
+mapfile -t standard < <(python3 - "$src/packages.toml" <<'PY'
+import sys, tomllib
+data = tomllib.load(open(sys.argv[1], "rb"))
+for name in data.get("standard") or []:
+    print(name)
+PY
+)
+
+mapfile -t aur < <(python3 - "$src/packages.toml" <<'PY'
+import sys, tomllib
+data = tomllib.load(open(sys.argv[1], "rb"))
+for name in data.get("aur") or []:
+    print(name)
+PY
+)
+
+((${#standard[@]})) && install_missing standard "${standard[@]}"
+((${#aur[@]})) && install_missing aur "${aur[@]}"
+{{- end -}}

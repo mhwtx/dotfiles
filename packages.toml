@@ -1,0 +1,16 @@
+# Curated packages to ensure on CachyOS.
+# Already-installed names are skipped; this is not a full-system export.
+standard = [
+  "ghostty",
+  "github-cli",
+  "helix",
+  "mise",
+  "ripgrep",
+  "ttf-meslo-nerd",
+  "zoxide",
+]
+
+aur = [
+  "cursor-cli",
+  "grok-build",
+]

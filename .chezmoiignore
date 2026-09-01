@@ -1,3 +1,6 @@
 # Keep repo docs out of the home directory.
 README.md
 AGENTS.md
+
+# Source-only package list (applied by run_onchange_after_install-04-packages).
+packages.toml
