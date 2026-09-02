@@ -8,7 +8,10 @@
 # shipped, so UCM fails and PipeWire falls back to stereo-fallback on the
 # headphone PCM with the RT1320 amp terminals left off. Ubuntu works because
 # it carries extra UCM patches. This restores the missing init file, keeps it
-# across alsa-ucm-conf upgrades, and re-enables the amp after PipeWire starts.
+# across alsa-ucm-conf upgrades, re-enables the amp after PipeWire starts, and
+# applies a speaker EQ. Windows THX loads RT1320 DSP firmware
+# (realtek/rt1320/rt1320_<dmi>.dat) that Linux does not ship, so raw output
+# is thin and mid-forward without equalization.
 set -euo pipefail
 
 vendor=$(tr -d '\0' </sys/devices/virtual/dmi/id/sys_vendor 2>/dev/null || true)
@@ -20,13 +23,15 @@ fi
 
 share="${XDG_DATA_HOME:-$HOME/.local/share}/razer-speakers"
 unit_dir="$HOME/.config/systemd/user"
+pw_dir="$HOME/.config/pipewire/pipewire.conf.d"
 overlay_dir=/usr/share/alsa/ucm2/codecs/rt721+rt1320
 overlay="$overlay_dir/init.conf"
 hook=/etc/pacman.d/hooks/razer-blade16-speakers.hook
 libexec=/usr/local/libexec/razer-blade16-ucm-overlay.sh
 unit="$unit_dir/razer-blade16-speakers.service"
+eq_conf="$pw_dir/razer-blade16-eq.conf"
 
-mkdir -p "$share" "$unit_dir"
+mkdir -p "$share" "$unit_dir" "$pw_dir"
 
 cat >"$share/enable-speakers.sh" <<'EOF'
 #!/bin/bash
@@ -57,6 +62,9 @@ amixer -c "$card" sset 'rt1320-1 OT23 R' on >/dev/null
 if amixer -c "$card" sget 'rt1320-2 OT23 L' >/dev/null 2>&1; then
   amixer -c "$card" sset 'rt1320-2 OT23 L' on >/dev/null
   amixer -c "$card" sset 'rt1320-2 OT23 R' on >/dev/null
+fi
+if amixer -c "$card" sget 'Post Mixer Speaker Playback DRC switch' >/dev/null 2>&1; then
+  amixer -c "$card" sset 'Post Mixer Speaker Playback DRC switch' on >/dev/null || true
 fi
 
 pw_card=""
@@ -99,6 +107,100 @@ RemainAfterExit=yes
 
 [Install]
 WantedBy=default.target
+EOF
+
+cat >"$eq_conf" <<'EOF'
+# Speaker EQ for the 2026 Razer Blade 16 (RZ09-0581).
+# Windows THX loads RT1320 DSP firmware Linux does not ship, so the 6-speaker
+# array plays raw and thin. This chain is wired only to the UCM Speaker sink.
+context.modules = [
+    { name = libpipewire-module-filter-chain
+        args = {
+            node.description = "Razer Speakers EQ"
+            media.name       = "Razer Speakers EQ"
+            filter.graph = {
+                nodes = [
+                    {
+                        type    = builtin
+                        name    = hp
+                        label   = bq_highpass
+                        control = { "Freq" = 40.0 "Q" = 0.707 "Gain" = 0.0 }
+                    }
+                    {
+                        type    = builtin
+                        name    = ls
+                        label   = bq_lowshelf
+                        control = { "Freq" = 110.0 "Q" = 0.70 "Gain" = 8.0 }
+                    }
+                    {
+                        type    = builtin
+                        name    = p250
+                        label   = bq_peaking
+                        control = { "Freq" = 250.0 "Q" = 0.90 "Gain" = 3.0 }
+                    }
+                    {
+                        type    = builtin
+                        name    = p800
+                        label   = bq_peaking
+                        control = { "Freq" = 800.0 "Q" = 1.20 "Gain" = -3.5 }
+                    }
+                    {
+                        type    = builtin
+                        name    = p2k
+                        label   = bq_peaking
+                        control = { "Freq" = 2000.0 "Q" = 1.30 "Gain" = -6.0 }
+                    }
+                    {
+                        type    = builtin
+                        name    = p4k
+                        label   = bq_peaking
+                        control = { "Freq" = 4500.0 "Q" = 1.40 "Gain" = -3.0 }
+                    }
+                    {
+                        type    = builtin
+                        name    = hs
+                        label   = bq_highshelf
+                        control = { "Freq" = 9000.0 "Q" = 0.70 "Gain" = -1.5 }
+                    }
+                    {
+                        type    = builtin
+                        name    = mix
+                        label   = mixer
+                        control = { "Gain 1" = 0.75 }
+                    }
+                ]
+                links = [
+                    { output = "hp:Out" input = "ls:In" }
+                    { output = "ls:Out" input = "p250:In" }
+                    { output = "p250:Out" input = "p800:In" }
+                    { output = "p800:Out" input = "p2k:In" }
+                    { output = "p2k:Out" input = "p4k:In" }
+                    { output = "p4k:Out" input = "hs:In" }
+                    { output = "hs:Out" input = "mix:In 1" }
+                ]
+                inputs  = [ "hp:In" ]
+                outputs = [ "mix:Out" ]
+            }
+            audio.channels = 2
+            audio.position = [ FL FR ]
+            capture.props = {
+                node.name      = "effect_input.razer-speakers-eq"
+                media.class    = Audio/Sink
+                audio.channels = 2
+                audio.position = [ FL FR ]
+                filter.smart = true
+                filter.smart.name = "effect_input.razer-speakers-eq.smart"
+                filter.smart.target = { node.name = "alsa_output.pci-0000_00_1f.3-platform-sof_sdw.HiFi__Speaker__sink" }
+            }
+            playback.props = {
+                node.name    = "effect_output.razer-speakers-eq"
+                node.passive = true
+                audio.channels = 2
+                audio.position = [ FL FR ]
+            }
+        }
+    }
+]
 EOF
 
 cat >"$share/ucm-overlay.sh" <<'EOF'
@@ -187,12 +289,10 @@ fi
 systemctl --user daemon-reload
 systemctl --user enable --now razer-blade16-speakers.service >/dev/null
 
-if ((need_root)); then
-  systemctl --user restart pipewire.service pipewire-pulse.service wireplumber.service
-  sleep 1
-  systemctl --user start razer-blade16-speakers.service
-fi
-
+systemctl --user restart pipewire.service pipewire-pulse.service wireplumber.service
+sleep 2
+systemctl --user start razer-blade16-speakers.service
 "$share/enable-speakers.sh"
 {{- end -}}
+
 
