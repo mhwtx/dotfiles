@@ -1,7 +1,7 @@
 # Interactive config
 if status is-interactive
     touch ~/.hushlogin
-    set -U fish_greeting "Welcome, Michael"
+    set -U fish_greeting
     fastfetch
     zoxide init fish --cmd cd | source
 end
